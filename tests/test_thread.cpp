@@ -135,7 +135,7 @@ public:
         runner_.reset(new ParallelLoopRunner(new Eigen::ThreadPoolDevice(tp_.get(), tp_->NumThreads())));
     }
     int get_num_threads() const override { return runner_->num_threads(); }
-    bool get_in_parallel() const override { return runner_->is_in_runner(); }
+    bool get_in_parallel() const override { return false; }
     uint64_t get_flags() const override { return 0; }
     void parallel_for(int n, const std::function<void(int, int)> &fn) override {
         runner_->Parallelize(n, [fn, n](size_t task_index) { fn(task_index, n); });
