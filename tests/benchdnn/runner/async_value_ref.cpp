@@ -16,9 +16,9 @@ limitations under the License.
 #include "async_value_ref.h"
 
 #include <utility>
-#include <system_error>
-#include <string_view>
 
+#include "absl/status/status.h"
+#include "absl/strings/string_view.h"
 #include "async_value.h"
 #include "ref_count.h"
 
@@ -28,16 +28,17 @@ RCReference<IndirectAsyncValue> MakeIndirectAsyncValue() {
   return TakeRef(internal::AllocateAndConstruct<IndirectAsyncValue>());
 }
 
-RCReference<ErrorAsyncValue> MakeErrorAsyncValueRef(std::error_code error) {
+RCReference<ErrorAsyncValue> MakeErrorAsyncValueRef(absl::Status status) {
+  // CHECK(!status.ok()) << "status must be an error";  // NOLINT
   return TakeRef(
-      internal::AllocateAndConstruct<ErrorAsyncValue>(std::move(error)));
+      internal::AllocateAndConstruct<ErrorAsyncValue>(std::move(status)));
 }
 
-RCReference<ErrorAsyncValue> MakeErrorAsyncValueRef(std::string_view message) {
-  // Converting to `std::string_view` because implicit conversion is not
+RCReference<ErrorAsyncValue> MakeErrorAsyncValueRef(absl::string_view message) {
+  // Converting to `absl::string_view` because implicit conversion is not
   // supported in android builds.
-  std::string_view message_view(message.data(), message.size());
-  return MakeErrorAsyncValueRef(std::make_error_code(std::errc::invalid_argument));
+  absl::string_view message_view(message.data(), message.size());
+  return MakeErrorAsyncValueRef(absl::InternalError(message_view));
 }
 
 // }  // namespace tsl

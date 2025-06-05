@@ -19,11 +19,13 @@ limitations under the License.
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
-#include <functional>
 #include <limits>
+#include <tuple>
 #include <utility>
-#include <iostream>
 
+#include "absl/base/attributes.h"
+#include "absl/base/optimization.h"
+#include "absl/log/check.h"
 #include "work_queue.h"
 #include "async_value_ref.h"
 #include "chain.h"
@@ -32,8 +34,6 @@ limitations under the License.
 #include "unsupported/Eigen/CXX11/Tensor"
 
 // namespace xla::cpu {
-
-using Task = std::function<void(size_t task_index)>;
 
 // Returns non-reference-counted async value ref in constructed state.
 //
@@ -58,7 +58,7 @@ AsyncValueRef<Chain> ParallelLoopRunner::ResetDoneEvent() {
 }
 
 size_t ParallelLoopRunner::num_threads() const {
-  return device_.load()->numThreads();
+  return device_.load()->numThreadsInPool();
 }
 
 bool ParallelLoopRunner::is_in_runner() const {
@@ -71,7 +71,7 @@ AsyncValueRef<Chain> ParallelLoopRunner::TakeDoneEvent(
 }
 
 template <typename Task>
-inline void ParallelLoopRunner::ScheduleOne(Task&& task) {
+ABSL_ATTRIBUTE_ALWAYS_INLINE void ParallelLoopRunner::ScheduleOne(Task&& task) {
   auto event = MakeConstructedAsyncValueRef<Chain>();
   done_event_.AndThen([event, task = std::forward<Task>(task)] {
     task();
@@ -81,30 +81,26 @@ inline void ParallelLoopRunner::ScheduleOne(Task&& task) {
 }
 
 template <typename ParallelTask>
-inline void ParallelLoopRunner::ScheduleAll(
+ABSL_ATTRIBUTE_ALWAYS_INLINE void ParallelLoopRunner::ScheduleAll(
     size_t num_tasks, ParallelTask&& parallel_task) {
-  assert(num_tasks > 1 && "Expected at least two tasks");
+  // DCHECK_GT(num_tasks, 1) << "Expected at least two task";
 
   // Use at most `num_threads()` workers as we can't run more parallel workers
   // than the number of threads in the thread pool.
   size_t num_workers = std::min(std::min(num_tasks, num_threads()),
                                 size_t{std::numeric_limits<uint16_t>::max()});
 
-  CountDownAsyncValueRef<Chain> count_down(num_workers);
-  auto count_down_done = count_down.AsRef();
+  auto parallelize =
+      [this, num_workers, num_tasks,
+       parallel_task = std::forward<ParallelTask>(parallel_task)](Chain) {
+        return Worker::Parallelize(device_.load()->getPool(), num_workers,
+                                   num_tasks, std::move(parallel_task));
+      };
 
-  auto parallelize = [this, num_tasks, count_down = std::move(count_down),
-                      parallel_task =
-                          std::forward<ParallelTask>(parallel_task)] {
-    Worker::Parallelize(device_, std::move(count_down), num_tasks,
-                        std::move(parallel_task));
-  };
-
-  done_event_.AndThen(std::move(parallelize));
-  done_event_ = std::move(count_down_done);
+  done_event_ = done_event_.FlatMap(parallelize);
 }
 
-// In the `Parallelize` implementations below:
+// Parallelize `task` over dimensions `dims` using `ParallelTask`.
 //
 // (1) If done event is already available, execute the task immediately in the
 //     caller thread. In this case we don't need to overwrite the done event,
@@ -116,33 +112,44 @@ inline void ParallelLoopRunner::ScheduleAll(
 //
 // We wrap all tasks into structs conforming to the `ParallelTest` API, so that
 // in profiles we can see human-readable names of the tasks instead of lambdas.
+template <typename ParallelTask, typename... Dims, typename Task>
+ABSL_ATTRIBUTE_ALWAYS_INLINE void ParallelLoopRunner::Parallelize(Dims... dims,
+                                                                  Task&& task) {
+  // DCHECK(done_event_) << "Parallel loop runner is in moved-from state";
 
-struct ParallelLoopRunner::ParallelTask1D {
-  inline void operator()(size_t task_index) const {
-    task(task_index);
-  }
+  size_t num_tasks = NumTasks(dims...);
+  // DCHECK_GT(num_tasks, 0) << "Expected at least one task";
 
-  Task1D task;
-};
+  // Fast path for the degenerate parallel loop with a single task.
+  if (ABSL_PREDICT_TRUE(num_tasks == 1)) {
+    // Converts the dimension into the first task index.
+    auto to_first_task_index = [](auto dim) {
+      if constexpr (std::is_same_v<decltype(dim), RangeDim>) {
+        return RangeIndex{0};
+      // } else {
+      //   return TileIndex{0, dim.range};
+      }
+    };
 
-void ParallelLoopRunner::Parallelize(size_t range, Task1D task) {
-  assert(done_event_ && "Parallel loop runner is in moved-from state");
-  assert(range > 0 && "Expected at least one task");
-  // std::cout << "Parallelize(" << range << ")" << std::endl;
-  // Fast path for the degenerate parallel loop with single task.
-  if (range == 1) {
     // Execute task in the caller thread if done event is already available.
-    if (done_event_.IsConcrete()) {
-      task(0);
+    if (ABSL_PREDICT_TRUE(done_event_.IsConcrete())) {
+      task(to_first_task_index(dims)...);
       return;
     }
 
     // Schedule task when done event becomes available.
-    ScheduleOne([task = std::move(task)] { task(0); });
+    ScheduleOne([task = std::forward<Task>(task),
+                 idxs = std::make_tuple(to_first_task_index(dims)...)] {
+      std::apply([&task](auto... idxs) { task(idxs...); }, idxs);
+    });
     return;
   }
 
-  ScheduleAll(range, ParallelTask1D{std::move(task)});
+  ScheduleAll(num_tasks, ParallelTask{dims..., std::forward<Task>(task)});
 }
+
+// void ParallelLoopRunner::Parallelize(RangeDim i, Task1D task) {
+//   Parallelize<ParallelTask1D, RangeDim>(i, std::move(task));
+// }
 
 // }  // namespace xla::cpu

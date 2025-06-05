@@ -138,7 +138,9 @@ public:
     bool get_in_parallel() const override { return runner_->is_in_runner(); }
     uint64_t get_flags() const override { return 0; }
     void parallel_for(int n, const std::function<void(int, int)> &fn) override {
-        runner_->Parallelize(n, [fn, n](size_t task_index) { fn(task_index, n); });
+        runner_->Parallelize(
+            ParallelLoopRunner::RangeDim{static_cast<size_t>(n)},
+            [fn, n](ParallelLoopRunner::RangeIndex i) { fn(i.offset, n); });
     }
 };
 

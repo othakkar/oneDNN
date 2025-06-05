@@ -23,8 +23,9 @@ limitations under the License.
 #include <cstddef>
 #include <cstdint>
 #include <vector>
-#include <mutex>
-#include <vector>
+
+#include "absl/synchronization/mutex.h"
+#include "absl/types/span.h"
 
 // namespace tsl {
 namespace internal {
@@ -65,18 +66,18 @@ class ConcurrentVector {
 
   const T& operator[](size_t index) const {
     auto state = State::Decode(state_.load(std::memory_order_acquire));
-    assert(index < state.size);
+    // DCHECK_LT(index, state.size);
     // .data() is a workaround for libc++ assertions in operator[], which will
     // cause data race when container is resized from another thread.
     return all_allocated_elements_.data()[state.last_allocated].data()[index];
   }
 
-  std::vector<const T> ToConstvector() const {
+  absl::Span<const T> ToConstSpan() const {
     auto state = State::Decode(state_.load(std::memory_order_acquire));
     auto& storage = all_allocated_elements_[state.last_allocated];
     // .data() is a workaround for libc++ assertions in operator[], which will
     // cause data race when container is resized from another thread.
-    return std::vector<const T>(storage.data(), state.size);
+    return absl::MakeConstSpan(storage.data(), state.size);
   }
 
   // Return the number of elements currently valid in this vector.  The vector
@@ -93,7 +94,7 @@ class ConcurrentVector {
   // Returns the index of the newly inserted item.
   template <typename... Args>
   size_t emplace_back(Args&&... args) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    absl::MutexLock lock(&mutex_);
 
     auto state = State::Decode(state_.load(std::memory_order_relaxed));
     auto& last = all_allocated_elements_[state.last_allocated];
@@ -115,7 +116,7 @@ class ConcurrentVector {
     // new vector.
     auto& new_last = all_allocated_elements_[state.last_allocated + 1];
     new_last.reserve(last.capacity() * 2);
-    assert(last.size() == last.capacity());
+    // DCHECK_EQ(last.size(), last.capacity());
 
     // Copy over the previous vector to the new vector.
     new_last.insert(new_last.begin(), last.begin(), last.end());
@@ -154,7 +155,7 @@ class ConcurrentVector {
   // relationship between emplace_back and operator[].
   std::atomic<uint64_t> state_;
 
-  std::mutex mutex_;
+  absl::Mutex mutex_;
 
   // ConcurrentVector does not support inserting more than 2^64 elements,
   // which should be more than enough for any reasonable use case.
