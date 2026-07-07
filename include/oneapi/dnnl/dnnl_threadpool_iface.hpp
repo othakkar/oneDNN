@@ -60,6 +60,30 @@ struct threadpool_iface {
     // Does nothing if SYNCHRONOUS, waits for all jobs for ASYNCHRONOUS
     virtual void wait() = 0;
 
+    /// Asynchronous verbose profiling hooks.
+    ///
+    /// When a threadpool advertises the ASYNCHRONOUS flag, parallel_for()
+    /// returns before the submitted work has executed, so oneDNN cannot time
+    /// primitive execution itself (see primitive_execute() in
+    /// src/common/primitive_iface.cpp). Instead, oneDNN hands the primitive's
+    /// verbose descriptor to the threadpool right before enqueueing work
+    /// (begin_profiling) and signals that all work for the primitive has been
+    /// submitted (end_profiling). A profiling-aware threadpool is then
+    /// responsible for measuring the deferred execution and emitting the
+    /// verbose profile line on completion (e.g. via
+    /// dnnl_threadpool_interop_verbose_log()).
+    ///
+    /// These methods are intentionally non-pure with no-op default bodies so
+    /// that existing threadpool_iface implementations remain source- and
+    /// ABI-compatible. Only invoked for ASYNCHRONOUS CPU streams when exec
+    /// profiling verbose is enabled.
+    ///
+    /// @param pd_info Primitive descriptor verbose string. Only valid for the
+    ///     duration of the begin_profiling() call; implementations that need it
+    ///     later must copy it.
+    virtual void begin_profiling(const char *pd_info) {}
+    virtual void end_profiling() {}
+
     /// If set, parallel_for() returns immediately and oneDNN needs implement
     /// waiting for the submitted closures to finish execution on its own.
     static constexpr uint64_t ASYNCHRONOUS = 1;

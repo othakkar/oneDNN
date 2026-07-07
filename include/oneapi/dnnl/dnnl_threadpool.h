@@ -79,6 +79,24 @@ dnnl_status_t DNNL_API dnnl_threadpool_interop_set_max_concurrency(
 dnnl_status_t DNNL_API dnnl_threadpool_interop_get_max_concurrency(
         int *max_concurrency);
 
+/// Emits a oneDNN verbose execution profile line for a primitive whose
+/// execution was timed externally.
+///
+/// This is intended for ASYNCHRONOUS threadpool runtimes: since oneDNN cannot
+/// time deferred execution itself, a profiling-aware threadpool measures the
+/// execution and calls this function on completion so the emitted line matches
+/// oneDNN's native verbose format and honors ONEDNN_VERBOSE gating. It is a
+/// no-op unless exec profiling verbose is enabled.
+///
+/// @param pd_info Primitive descriptor verbose string.
+/// @param start_ms Execution start timestamp in milliseconds (same epoch used
+///     for the verbose timestamp column).
+/// @param duration_ms Measured execution time in milliseconds.
+/// @returns #dnnl_success on success and a status describing the error
+///     otherwise.
+dnnl_status_t DNNL_API dnnl_threadpool_interop_verbose_log(
+        const char *pd_info, double start_ms, double duration_ms);
+
 /// @copydoc dnnl_sgemm()
 /// @param threadpool A pointer to a threadpool interface (only when built with
 ///     the THREADPOOL CPU runtime).
